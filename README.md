@@ -116,3 +116,121 @@ joint_5:
 En la carpeta launch se encuentran el archivo de arranque “one_controller.launch” donde se configuran los parámetros de comunicación, se definen los motores mediante el archivo “basic.yaml” y se inicializa el nodo “dynamixel_workbench_controllers” del paquete con el mismo nombre, lo que a su vez implica definir los tópicos a los que va a estar conectado y los servicios a los que va a estar suscrito.   
 
 Como una primera aproximación al movimiento de los servomotores se realiza el envío de un comando al servicio desde consola con el fin de indicarle un movimiento al motor y que este lo ejecute. Para ello es necesario ejecutar los comandos “build” para actualizar el paquete y sus modificaciones para luego correr el archivo “.launch” para inicializar los nodos y configuraciones iniciales; luego de esto se ejecuta un comando “source” para que el sistema agregue las variables de entorno que ROS necesita para funcionar; y por último se envía una instrucción mediante el servicio “command” para que ejecute un movimiento el motor con identificador “ID:1”. 
+
+```Linux Kernel Module
+catkin build dynamixel_one_motor
+roslaunch dynamixel_one_motor one_controller.launch
+source devel/setup.bash
+rosservice call /dynamixel_workbench/dynamixel_command "command: ''
+id: 1
+addr_name: 'Goal_Position'
+value: 500"
+```
+El resultado es el esperado y el motor de la base se mueve a la posición deseada por lo que, como siguiente paso, se propone realizar el movimiento secuencial de los cuatro motores articulares mediante el uso de un script que contenga las instrucciones necesarias para realizar su respectiva ubicación en las distintas configuraciones obtenidas desde Matlab.
+
+El código se edita desde el formato base “scripts/jointSrv.py” en donde básicamente o que se obtiene desde consola, es un menú de selección con cinco configuraciones articulares y que se pueden seleccionar a solicitud del usuario. 
+
+```Python
+"""
+Allows to use the service dynamixel_command
+"""
+import rospy
+import time
+from std_msgs.msg import String
+from dynamixel_workbench_msgs.srv import DynamixelCommand
+
+__author__ = "F Gonzalez, S Realpe, JM Fajardo"
+__credits__ = ["Felipe Gonzalez", "Sebastian Realpe",
+    "Jose Manuel Fajardo", "Robotis"]
+__email__ = "fegonzalezro@unal.edu.co"
+__status__ = "Test"
+
+# It allows, when it is avilable, to send an instruction as a service to one of the motors available 
+def jointCommand(command, id_num, addr_name, value, time):
+    # rospy.init_node('joint_node', anonymous=False)
+    rospy.wait_for_service('dynamixel_workbench/dynamixel_command')
+    try:
+        dynamixel_command = rospy.ServiceProxy(
+            '/dynamixel_workbench/dynamixel_command', DynamixelCommand)
+        result = dynamixel_command(command, id_num, addr_name, value)
+        rospy.sleep(time)
+        return result.comm_result
+    except rospy.ServiceException as exc:
+        print(str(exc))
+        
+
+# Conversion between goal position expressed in angle in degrees to a decimal expresion used by motors 
+# to positioned itsel
+def ang2bit(t):
+    return int(round(t*1023/(300), 0))
+
+# It received positions in angle in degrees for five motors and translates them to secuencial commands 
+def poseRobot(t1, t2, t3, t4, t5=0, ts = 0.5):
+    t1 = ang2bit(t1)
+    t2 = ang2bit(t2)
+    t3 = ang2bit(t3)
+    t4 = ang2bit(t4)
+    t5 = ang2bit(t5)
+    
+    # Each position goals has a constant value in order to positioned the manipulator from a pose that 
+    # is just right in the middle of the range set to every joint
+    jointCommand('', 1, 'Goal_Position', 511+t1, 0.5)
+    time.sleep(ts)
+    jointCommand('', 2, 'Goal_Position', 511+t2, 0.5)
+    time.sleep(ts)
+    jointCommand('', 3, 'Goal_Position', 239+t3, 0.5)
+    time.sleep(ts)
+    jointCommand('', 4, 'Goal_Position', 511+t4, 0.5)
+    time.sleep(ts)
+    jointCommand('', 5, 'Goal_Position', 511+t5, 0.5)
+    time.sleep(ts)
+
+# Main code where is deployed the main menu in console and from it is able to select the desired pose 
+if __name__ == '__main__':
+    try:
+        while not rospy.is_shutdown():
+            # Goal_Position (0,1023)
+            # Torque_Limit (0,1023)
+            # jointCommand('', 1, 'Torque_Limit', 400)
+            valor = int(input(f'''Ingrese la pose a la que desea ir:
+            1. Home [0, 0, 0, 0, 0]
+            2. P1   [-25, 15, -20, 20, 0]
+            3. P2   [ 35,-35, 30, -30, 0]
+            4. P3   [-85, 20, -55, 17, 0]
+            5. P4   [-80, 35, -55, 45, 0]
+            '''))
+
+            if valor == 1:
+                poseRobot(0, 0, 0, 0, 0)
+            elif valor == 2:
+                poseRobot(-25, 15, -20, 20, 0)
+            elif valor == 3:
+                poseRobot(35, -35, 30, -30, 0)
+            elif valor == 4:
+                poseRobot(-85, 20, -55, 17, 0)
+            elif valor == 5:
+                poseRobot(-80, 35, -55, 45, 0)
+            else:
+                poseRobot(-80, 35, -55, 45, 0)
+
+    except rospy.ROSInterruptException:
+        pass
+```
+El resultado se puede ver en el siguiente video:
+
+https://user-images.githubusercontent.com/14100413/236875274-a2cfab24-4c5b-43d5-bfb4-1ce90132f8bd.mp4
+
+## HMI
+
+Para la interfaz de usuario se utilizó la librería PyQt5 de Python, con la cual se creó la interfaz mostrada en la siguiente figura:
+
+![image](https://github.com/jptejeirol/Robotica_Lab_4_/assets/164267794/7fcaeeeb-6008-460a-8866-1070440d8e5a)
+
+Aquí se pueden evidenciar 4 secciones principales:
+
+1. El título y los nombres de los integrantes del grupo.
+2. Una sección donde se indican la posición en grados de cada una de las juntas en la posición actual
+3. Una sección donde se indican las 5 posiciones que el usuario puede elegir.
+4. Una sección donde se muestra la gráfica del robot usando el toolbox de Peter Corke en Matlab, representando la posición teórica.
+
+Para conectar la interfaz con el movimiento del robot, se creo una clase ```Robot()``` en el script [moveRobot.py](./scripts/moveRobot.py) en la que se tienen métodos para llamar a los servicios y suscriptores necesarios para mover el robot y obtener las posiciones de cada junta. Específicamente, con el método ```jointCommand()``` se llama el servicio para mover cada motor y con el método ``` getJointValues()``` se crea un suscriptor al tópico ```joint_states``` para acceder a las posiciones de cada motor. 
